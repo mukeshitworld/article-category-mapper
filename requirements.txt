@@ -1,8 +1,9 @@
 streamlit
 pandas
 numpy
-requests
-beautifulsoup4
-sentence-transformers
 scikit-learn
-torch
+sentence-transformers
+beautifulsoup4
+requests
+lxml
+
