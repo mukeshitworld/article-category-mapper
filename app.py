@@ -6,102 +6,73 @@ from bs4 import BeautifulSoup
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 
-# =========================
-# CONFIG
-# =========================
-PASSWORD = "blue"
-CATEGORIES_FILE = "categories.csv"
-MODEL_NAME = "all-MiniLM-L6-v2"  # fast + accurate local model
-MAX_PARAGRAPHS = 8
+# ---------------------------
+# BASIC CONFIG
+# ---------------------------
+st.set_page_config(
+    page_title="Bluehost Article → Category Mapper",
+    layout="wide"
+)
 
-# =========================
+APP_PASSWORD = "blue"
+
+# ---------------------------
 # PASSWORD GATE
-# =========================
+# ---------------------------
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 
 if not st.session_state.authenticated:
-    st.title("🔒 Protected Tool")
-    pwd = st.text_input("Enter password", type="password")
-    if st.button("Unlock"):
-        if pwd == PASSWORD:
-            st.session_state.authenticated = True
-            st.rerun()
-        else:
-            st.error("Incorrect password")
-    st.stop()
+    st.title("🔐 Internal Access")
+    password = st.text_input("Enter password", type="password")
+    if password == APP_PASSWORD:
+        st.session_state.authenticated = True
+        st.rerun()
+    else:
+        st.stop()
 
-# =========================
+# ---------------------------
 # LOAD MODEL (cached)
-# =========================
+# ---------------------------
 @st.cache_resource
 def load_model():
-    return SentenceTransformer(MODEL_NAME)
+    return SentenceTransformer("all-MiniLM-L6-v2")
 
 model = load_model()
 
-# =========================
-# LOAD CATEGORIES
-# =========================
+# ---------------------------
+# LOAD CATEGORY DATA
+# ---------------------------
 @st.cache_data
 def load_categories():
-    df = pd.read_csv(CATEGORIES_FILE)
-    df["label"] = df["main_category"] + " → " + df["sub_category"].fillna("")
-    df["embed_text"] = (
-        df["main_category"] + ". " +
-        df["sub_category"].fillna("") + ". " +
+    df = pd.read_csv("categories.csv")
+    df["definition_text"] = df["definition_text"].fillna("")
+    df["full_text"] = (
+        df["main_category"] + " | " +
+        df["sub_category"].fillna("") + " | " +
         df["definition_text"]
     )
-    embeddings = model.encode(df["embed_text"].tolist(), normalize_embeddings=True)
-    return df, embeddings
+    return df
 
-categories_df, category_embeddings = load_categories()
+categories_df = load_categories()
+category_embeddings = model.encode(
+    categories_df["full_text"].tolist(),
+    normalize_embeddings=True
+)
 
-# =========================
-# URL CONTENT EXTRACTION (AFTER H1)
-# =========================
-def extract_article_after_h1(url, max_paragraphs=8):
-    headers = {"User-Agent": "Mozilla/5.0"}
-    resp = requests.get(url, headers=headers, timeout=15)
-    resp.raise_for_status()
-
-    soup = BeautifulSoup(resp.text, "html.parser")
-
-    h1 = soup.find("h1")
-    if not h1:
-        return ""
-
-    paragraphs = []
-    for el in h1.find_all_next():
-        if el.name == "p":
-            txt = el.get_text(strip=True)
-            if len(txt) > 60:
-                paragraphs.append(txt)
-        if len(paragraphs) >= max_paragraphs:
-            break
-
-    return " ".join(paragraphs)
-
-# =========================
-# SIMILARITY MATCHING
-# =========================
-def suggest_category(text):
-    query_vec = model.encode([text], normalize_embeddings=True)
-    scores = cosine_similarity(query_vec, category_embeddings)[0]
-
-    categories_df["score"] = scores
-    ranked = categories_df.sort_values("score", ascending=False)
-
-    best = ranked.iloc[0]
-    return best, ranked.head(5), text
-
-# =========================
+# ---------------------------
 # UI
-# =========================
+# ---------------------------
 st.title("Bluehost Article → Category Mapper")
-st.caption("Semantic category mapping using **local vector embeddings** (Main Category + Sub-Category).")
+st.caption(
+    "Semantic category mapping using **local vector embeddings** "
+    "(Main Category + Sub-Category)."
+)
 
-mode = st.radio("Choose input mode:", ["URL → Category", "Content → Category"])
+mode = st.radio(
+    "Choose input mode:",
+    ["URL → Category", "Content → Category"]
+)
 
 threshold = st.slider(
     "Auto-assign threshold",
@@ -111,51 +82,120 @@ threshold = st.slider(
     step=0.01
 )
 
-article_text = ""
+st.divider()
 
-# =========================
+# ---------------------------
+# HELPERS
+# ---------------------------
+def fetch_article_text(url):
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/121.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.google.com/"
+    }
+
+    response = requests.get(url, headers=headers, timeout=15)
+    response.raise_for_status()
+
+    soup = BeautifulSoup(response.text, "html.parser")
+
+    h1 = soup.find("h1")
+    if not h1:
+        return ""
+
+    paragraphs = []
+    for tag in h1.find_all_next(["p", "h2"]):
+        if tag.name == "h2":
+            break
+        text = tag.get_text(strip=True)
+        if len(text.split()) > 5:
+            paragraphs.append(text)
+
+    return " ".join(paragraphs)
+
+
+def get_category_scores(text):
+    text_embedding = model.encode(
+        [text],
+        normalize_embeddings=True
+    )
+
+    scores = cosine_similarity(
+        text_embedding,
+        category_embeddings
+    )[0]
+
+    categories_df["score"] = scores
+    return categories_df.sort_values("score", ascending=False)
+
+
+# ---------------------------
 # INPUT
-# =========================
+# ---------------------------
+article_text = ""
+input_source = ""
+
 if mode == "URL → Category":
     url = st.text_input("Enter article URL")
     if st.button("Suggest Category") and url:
         try:
-            article_text = extract_article_after_h1(url, MAX_PARAGRAPHS)
-            if len(article_text.split()) < 80:
+            article_text = fetch_article_text(url)
+            input_source = "URL content after <h1>"
+            if not article_text:
                 st.error("Could not extract meaningful article content.")
                 st.stop()
-        except Exception as e:
-            st.error(f"Failed to fetch URL: {e}")
-            st.stop()
+        except requests.exceptions.HTTPError as e:
+            if "403" in str(e):
+                st.warning(
+                    "⚠️ This site blocks cloud requests.\n\n"
+                    "Please use **Content → Category** mode instead."
+                )
+                st.stop()
+            else:
+                st.error(f"Failed to fetch URL: {e}")
+                st.stop()
 
 else:
-    article_text = st.text_area("Paste article content here", height=250)
-    if st.button("Suggest Category") and not article_text.strip():
-        st.warning("Please paste article content.")
-        st.stop()
+    article_text = st.text_area(
+        "Paste article content here",
+        height=220
+    )
+    input_source = "Manually pasted content"
 
-# =========================
+# ---------------------------
 # PROCESS
-# =========================
+# ---------------------------
 if article_text:
-    best, top5, used_text = suggest_category(article_text)
+    ranked = get_category_scores(article_text)
+    top = ranked.iloc[0]
 
-    status = "AUTO-ASSIGN ✅" if best["score"] >= threshold else "REVIEW ⚠️"
+    status = "AUTO-ASSIGN ✅" if top.score >= threshold else "REVIEW ⚠️"
 
     st.subheader("Result")
-    st.write(f"**Main Category:** {best['main_category']}")
-    st.write(f"**Sub-Category:** {best['sub_category']}")
-    st.write(f"**Score:** `{best['score']:.3f}`")
-    st.write(f"**Status:** {status}")
+    st.markdown(f"**Suggested Main Category:** {top.main_category}")
+    st.markdown(
+        f"**Suggested Sub-Category:** "
+        f"{top.sub_category if pd.notna(top.sub_category) else '—'}"
+    )
+    st.markdown(f"**Score:** `{top.score:.3f}`")
+    st.markdown(f"**Status:** {status}")
 
     st.subheader("Top suggestions")
-    for _, row in top5.iterrows():
-        st.write(f"- {row['label']} — {row['score']:.3f}")
+    for _, row in ranked.head(5).iterrows():
+        st.markdown(
+            f"- **{row.main_category} → "
+            f"{row.sub_category if pd.notna(row.sub_category) else '—'}** "
+            f"— `{row.score:.3f}`"
+        )
 
     with st.expander("Text used for vector embedding"):
+        st.caption(input_source)
         st.text_area(
             "Embedding input (read-only)",
-            used_text,
-            height=200,
-            disabled=True
+            article_text,
+            height=200
         )
