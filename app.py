@@ -1,8 +1,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import requests
-from bs4 import BeautifulSoup
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -55,6 +53,7 @@ def load_categories():
     return df
 
 categories_df = load_categories()
+
 category_embeddings = model.encode(
     categories_df["full_text"].tolist(),
     normalize_embeddings=True
@@ -65,13 +64,8 @@ category_embeddings = model.encode(
 # ---------------------------
 st.title("Bluehost Article → Category Mapper")
 st.caption(
-    "Semantic category mapping using **local vector embeddings** "
+    "Semantic category mapping using local vector embeddings "
     "(Main Category + Sub-Category)."
-)
-
-mode = st.radio(
-    "Choose input mode:",
-    ["URL → Category", "Content → Category"]
 )
 
 threshold = st.slider(
@@ -85,39 +79,23 @@ threshold = st.slider(
 st.divider()
 
 # ---------------------------
+# INPUT
+# ---------------------------
+st.subheader("Article content")
+
+article_text = st.text_area(
+    "Paste article content",
+    height=250,
+    placeholder="Paste H1 + introduction or full article text..."
+)
+
+submit = st.button("Submit for category mapping")
+
+input_source = "Manually pasted content"
+
+# ---------------------------
 # HELPERS
 # ---------------------------
-def fetch_article_text(url):
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/121.0.0.0 Safari/537.36"
-        ),
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.google.com/"
-    }
-
-    response = requests.get(url, headers=headers, timeout=15)
-    response.raise_for_status()
-
-    soup = BeautifulSoup(response.text, "html.parser")
-
-    h1 = soup.find("h1")
-    if not h1:
-        return ""
-
-    paragraphs = []
-    for tag in h1.find_all_next(["p", "h2"]):
-        if tag.name == "h2":
-            break
-        text = tag.get_text(strip=True)
-        if len(text.split()) > 5:
-            paragraphs.append(text)
-
-    return " ".join(paragraphs)
-
-
 def get_category_scores(text):
     text_embedding = model.encode(
         [text],
@@ -129,47 +107,19 @@ def get_category_scores(text):
         category_embeddings
     )[0]
 
-    categories_df["score"] = scores
-    return categories_df.sort_values("score", ascending=False)
+    df = categories_df.copy()
+    df["score"] = scores
+    return df.sort_values("score", ascending=False)
 
-
-# ---------------------------
-# INPUT
-# ---------------------------
-article_text = ""
-input_source = ""
-
-if mode == "URL → Category":
-    url = st.text_input("Enter article URL")
-    if st.button("Suggest Category") and url:
-        try:
-            article_text = fetch_article_text(url)
-            input_source = "URL content after <h1>"
-            if not article_text:
-                st.error("Could not extract meaningful article content.")
-                st.stop()
-        except requests.exceptions.HTTPError as e:
-            if "403" in str(e):
-                st.warning(
-                    "⚠️ This site blocks cloud requests.\n\n"
-                    "Please use **Content → Category** mode instead."
-                )
-                st.stop()
-            else:
-                st.error(f"Failed to fetch URL: {e}")
-                st.stop()
-
-else:
-    article_text = st.text_area(
-        "Paste article content here",
-        height=220
-    )
-    input_source = "Manually pasted content"
 
 # ---------------------------
 # PROCESS
 # ---------------------------
-if article_text:
+if submit:
+    if not article_text.strip():
+        st.warning("Please paste article content before submitting.")
+        st.stop()
+
     ranked = get_category_scores(article_text)
     top = ranked.iloc[0]
 
@@ -197,5 +147,6 @@ if article_text:
         st.text_area(
             "Embedding input (read-only)",
             article_text,
-            height=200
+            height=200,
+            disabled=True
         )
