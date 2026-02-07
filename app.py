@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -89,7 +88,12 @@ article_text = st.text_area(
     placeholder="Paste H1 + introduction or full article text..."
 )
 
-submit = st.button("Submit for category mapping")
+submit = st.button(
+    "🚀 Run category mapping",
+    type="primary",
+    use_container_width=True,
+    disabled=not article_text.strip()
+)
 
 input_source = "Manually pasted content"
 
@@ -116,12 +120,9 @@ def get_category_scores(text):
 # PROCESS
 # ---------------------------
 if submit:
-    if not article_text.strip():
-        st.warning("Please paste article content before submitting.")
-        st.stop()
-
-    ranked = get_category_scores(article_text)
-    top = ranked.iloc[0]
+    with st.spinner("Analyzing content and computing semantic similarity..."):
+        ranked = get_category_scores(article_text)
+        top = ranked.iloc[0]
 
     status = "AUTO-ASSIGN ✅" if top.score >= threshold else "REVIEW ⚠️"
 
